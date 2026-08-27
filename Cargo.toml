@@ -1,0 +1,11 @@
+[workspace]
+members = ["crates/win_decode", "crates/win2zarr"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Kazumi Okada"]
+repository = "https://github.com/okadak0806/win2zarr"
+rust-version = "1.73"
