@@ -36,6 +36,27 @@ def test_bf16_roundtrip_small_ints():
     np.testing.assert_allclose(back, x, rtol=0, atol=0.015625)
 
 
+def test_bf16_nan_inf_and_rounding():
+    pos_nan = np.array([np.float32("nan")], dtype=np.float32)
+    neg_nan = np.array(
+        [np.copysign(np.float32("nan"), np.float32(-1.0))], dtype=np.float32
+    )
+    pos_inf = np.array([np.float32("inf")], dtype=np.float32)
+    neg_inf = np.array([np.float32("-inf")], dtype=np.float32)
+
+    assert np.isnan(bf16_bits_to_f32(f32_to_bf16_bits(pos_nan))[0])
+    assert np.isnan(bf16_bits_to_f32(f32_to_bf16_bits(neg_nan))[0])
+    assert np.isposinf(bf16_bits_to_f32(f32_to_bf16_bits(pos_inf))[0])
+    assert np.isneginf(bf16_bits_to_f32(f32_to_bf16_bits(neg_inf))[0])
+
+    # Payloads that wrapped to zero before the NaN guard.
+    wrapped = np.array([0x7FFFFFFF, 0xFFFF8000], dtype=np.uint32).view(np.float32)
+    assert np.isnan(bf16_bits_to_f32(f32_to_bf16_bits(wrapped))).all()
+
+    one = np.array([1.0], dtype=np.float32)
+    np.testing.assert_array_equal(bf16_bits_to_f32(f32_to_bf16_bits(one)), one)
+
+
 def test_zarr_minute_shard_roundtrip(tmp_path):
     zarr = pytest.importorskip("zarr")
     _ = zarr
