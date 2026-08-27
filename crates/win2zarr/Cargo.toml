@@ -1,0 +1,19 @@
+[package]
+name = "win2zarr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Python bindings for WIN/WIN32 decode"
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+win_decode = { path = "../win_decode" }
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py39"] }
+numpy = "0.23"

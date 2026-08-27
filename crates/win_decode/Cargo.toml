@@ -1,0 +1,15 @@
+[package]
+name = "win_decode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Independent decoder for the published WIN/WIN32 seismic waveform format"
+
+[lib]
+name = "win_decode"
+path = "src/lib.rs"
+
+[dependencies]

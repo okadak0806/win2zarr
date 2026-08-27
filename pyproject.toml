@@ -1,0 +1,46 @@
+[build-system]
+requires = ["maturin>=1.4,<2"]
+build-backend = "maturin"
+
+[project]
+name = "win2zarr"
+version = "0.1.0"
+description = "Convert WIN/WIN32 seismic waveform files to analysis-ready Zarr"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Kazumi Okada" }]
+requires-python = ">=3.9"
+keywords = ["seismology", "WIN", "WIN32", "Zarr", "waveform"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = ["numpy>=1.20"]
+
+[project.optional-dependencies]
+zarr = ["zarr>=2.12,<4", "numcodecs>=0.10"]
+dev = ["pytest>=7", "zarr>=2.12,<4", "numcodecs>=0.10"]
+
+[project.urls]
+Homepage = "https://github.com/okadak0806/win2zarr"
+Documentation = "https://wwweic.eri.u-tokyo.ac.jp/WIN/man.en/winformat.html"
+Source = "https://github.com/okadak0806/win2zarr"
+
+[project.scripts]
+win-to-zarr = "win2zarr.cli:main"
+
+[tool.maturin]
+manifest-path = "crates/win2zarr/Cargo.toml"
+python-source = "python"
+module-name = "win2zarr._native"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
