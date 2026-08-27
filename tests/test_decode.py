@@ -87,6 +87,24 @@ def test_large_diffs_use_wider_samples():
     assert decoded.seconds[0].time.year == 1999
 
 
+def test_full_range_i32_deltas_roundtrip():
+    samples = np.array(
+        [np.iinfo(np.int32).min, np.iinfo(np.int32).max, np.iinfo(np.int32).min, 0],
+        dtype=np.int32,
+    )
+    original = WinFile(
+        format="win",
+        seconds=[
+            WinSecond(
+                time=WinTime(2020, 1, 2, 3, 4, 5),
+                channels=[ChannelSecond(0x00FF, 4, samples)],
+            )
+        ],
+    )
+    decoded = decode_win_bytes(encode_win_bytes(original))
+    np.testing.assert_array_equal(decoded.seconds[0].channels[0].samples, samples)
+
+
 def test_decode_win_path(tmp_path):
     from win2zarr import decode_win
 

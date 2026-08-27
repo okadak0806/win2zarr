@@ -11,9 +11,14 @@ def f32_to_bf16_bits(values: np.ndarray) -> np.ndarray:
     bits = x.view(np.uint32).copy()
     lsb = (bits >> 16) & np.uint32(1)
     rounding_bias = np.uint32(0x7FFF) + lsb
-    # Avoid overflow on NaN/Inf payloads by using uint32 wraparound add.
-    bits = bits + rounding_bias
-    return np.asarray(bits >> np.uint32(16), dtype=np.uint16)
+    # Round finite values only. NaN payloads such as 0x7fffffff / 0xffff8000
+    # wrap to ±0 if the bias is added; infinities are passed through.
+    rounded = np.where(np.isfinite(x), bits + rounding_bias, bits)
+    out = np.asarray(rounded >> np.uint32(16), dtype=np.uint16)
+    nan = np.isnan(x)
+    sign = np.asarray((bits >> np.uint32(16)) & np.uint32(0x8000), dtype=np.uint16)
+    canonical_nan = sign | np.uint16(0x7FC0)
+    return np.where(nan, canonical_nan, out).astype(np.uint16, copy=False)
 
 
 def bf16_bits_to_f32(bits: np.ndarray) -> np.ndarray:

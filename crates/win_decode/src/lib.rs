@@ -32,10 +32,7 @@ pub struct WinTime {
 impl WinTime {
     /// Truncate to the containing minute (second = 0).
     pub fn minute_key(self) -> Self {
-        Self {
-            second: 0,
-            ..self
-        }
+        Self { second: 0, ..self }
     }
 
     pub fn is_valid(self) -> bool {
@@ -95,7 +92,10 @@ impl fmt::Display for DecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             DecodeError::Truncated { offset, needed } => {
-                write!(f, "truncated WIN data at {offset}, needed {needed} more bytes")
+                write!(
+                    f,
+                    "truncated WIN data at {offset}, needed {needed} more bytes"
+                )
             }
             DecodeError::InvalidBlockSize { offset, size } => {
                 write!(f, "invalid second-block size {size} at {offset}")
@@ -126,7 +126,11 @@ pub enum EncodeError {
     InvalidTime(WinTime),
     InvalidSampleRate(u16),
     EmptyChannel,
-    SampleRateMismatch { channel_id: u16, n_samples: usize, sample_rate: u16 },
+    SampleRateMismatch {
+        channel_id: u16,
+        n_samples: usize,
+        sample_rate: u16,
+    },
 }
 
 impl fmt::Display for EncodeError {
@@ -259,9 +263,13 @@ fn channel_payload_len(sample_size: u16, n_samples: u16) -> Result<usize, Decode
     }
     let ns = n_samples as usize;
     let extra = ns - 1;
+    // Selectors 0–4: remaining samples are two's-complement diffs of that width
+    // (0 = nibble). Selector 5 (WIN_pkg-3) stores remaining samples as 4-byte
+    // absolute i32 values, not 5-byte diffs.
     let n = match sample_size {
         0 => extra.div_ceil(2),
-        1 | 2 | 3 | 4 | 5 => extra * sample_size as usize,
+        1..=4 => extra * sample_size as usize,
+        5 => extra * 4,
         _ => {
             return Err(DecodeError::InvalidSampleSize {
                 offset: 0,
@@ -325,7 +333,7 @@ fn decode_diffs(
             }
         }
         5 => {
-            // Some WIN32 writers store subsequent samples as absolute i32, not diffs.
+            // WIN_pkg-3: remaining samples are 4-byte absolute i32, not diffs.
             for chunk in payload.chunks_exact(4) {
                 samples.push(i32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
             }
@@ -440,12 +448,13 @@ fn decode_win32(data: &[u8]) -> Result<Vec<SecondBlock>, DecodeError> {
         let time = parse_win32_bcd(data, offset)?;
         let payload_size = u32_be(data, offset + 12)? as usize;
         let payload_start = offset + 16;
-        let payload_end = payload_start
-            .checked_add(payload_size)
-            .ok_or(DecodeError::InvalidBlockSize {
-                offset,
-                size: payload_size as u32,
-            })?;
+        let payload_end =
+            payload_start
+                .checked_add(payload_size)
+                .ok_or(DecodeError::InvalidBlockSize {
+                    offset,
+                    size: payload_size as u32,
+                })?;
         if payload_end > data.len() {
             return Err(DecodeError::Truncated {
                 offset: payload_start,
@@ -500,24 +509,31 @@ fn write_win32_bcd(buf: &mut Vec<u8>, time: WinTime) {
     buf.push(0);
 }
 
+fn sample_delta(prev: i32, next: i32) -> i64 {
+    i64::from(next) - i64::from(prev)
+}
+
 fn choose_sample_size(samples: &[i32]) -> u16 {
     if samples.len() <= 1 {
         return 1;
     }
-    let mut max_abs = 0i32;
+    let mut max_abs = 0u64;
     for w in samples.windows(2) {
-        max_abs = max_abs.max((w[1] - w[0]).abs());
+        max_abs = max_abs.max(sample_delta(w[0], w[1]).unsigned_abs());
     }
     if max_abs <= 7 {
         0
     } else if max_abs <= 127 {
         1
-    } else if max_abs <= 32767 {
+    } else if max_abs <= 32_767 {
         2
     } else if max_abs <= 8_388_607 {
         3
-    } else {
+    } else if max_abs <= i32::MAX as u64 {
         4
+    } else {
+        // Diff does not fit in a 4-byte two's-complement i32 (e.g. i32::MAX - i32::MIN).
+        5
     }
 }
 
@@ -528,7 +544,10 @@ fn encode_diffs(samples: &[i32], sample_size: u16) -> Vec<u8> {
     let mut out = Vec::new();
     match sample_size {
         0 => {
-            let diffs: Vec<i32> = samples.windows(2).map(|w| w[1] - w[0]).collect();
+            let diffs: Vec<i32> = samples
+                .windows(2)
+                .map(|w| sample_delta(w[0], w[1]) as i32)
+                .collect();
             for (i, d) in diffs.iter().enumerate() {
                 let nib = (*d as u8) & 0x0f;
                 if i % 2 == 0 {
@@ -541,18 +560,18 @@ fn encode_diffs(samples: &[i32], sample_size: u16) -> Vec<u8> {
         }
         1 => {
             for w in samples.windows(2) {
-                out.push((w[1] - w[0]) as i8 as u8);
+                out.push(sample_delta(w[0], w[1]) as i32 as i8 as u8);
             }
         }
         2 => {
             for w in samples.windows(2) {
-                let d = (w[1] - w[0]) as i16;
+                let d = sample_delta(w[0], w[1]) as i32 as i16;
                 out.extend_from_slice(&d.to_be_bytes());
             }
         }
         3 => {
             for w in samples.windows(2) {
-                let d = w[1] - w[0];
+                let d = sample_delta(w[0], w[1]) as i32;
                 out.push(((d >> 16) & 0xff) as u8);
                 out.push(((d >> 8) & 0xff) as u8);
                 out.push((d & 0xff) as u8);
@@ -560,7 +579,14 @@ fn encode_diffs(samples: &[i32], sample_size: u16) -> Vec<u8> {
         }
         4 => {
             for w in samples.windows(2) {
-                out.extend_from_slice(&(w[1] - w[0]).to_be_bytes());
+                let d = sample_delta(w[0], w[1]) as i32;
+                out.extend_from_slice(&d.to_be_bytes());
+            }
+        }
+        5 => {
+            // Remaining samples are 4-byte absolute i32, matching decode_diffs.
+            for &sample in &samples[1..] {
+                out.extend_from_slice(&sample.to_be_bytes());
             }
         }
         _ => {}
@@ -716,7 +742,10 @@ mod tests {
         let decoded = decode(&bytes).unwrap();
         assert_eq!(decoded.seconds.len(), 3);
         assert_eq!(decoded.seconds[2].channels.len(), 3);
-        assert_eq!(decoded.seconds[1].channels[1].samples, seconds[1].channels[1].samples);
+        assert_eq!(
+            decoded.seconds[1].channels[1].samples,
+            seconds[1].channels[1].samples
+        );
     }
 
     #[test]
@@ -773,5 +802,73 @@ mod tests {
         assert_eq!(year_from_yy(0), 2000);
         assert_eq!(year_from_yy(20), 2020);
         assert_eq!(year_from_yy(80), 2080);
+    }
+
+    /// Handmade selector-5 fixture: remaining samples are 4-byte absolute i32.
+    /// A following 1 Hz channel must stay aligned (extra*5 framing would desync).
+    #[test]
+    fn selector_5_multichannel_fixture_roundtrip() {
+        let mut second = Vec::new();
+        write_win_bcd(&mut second, t(5));
+
+        second.extend_from_slice(&0x1111u16.to_be_bytes());
+        let hdr_a = (5u16 << 12) | 4; // size 5, 4 samples
+        second.extend_from_slice(&hdr_a.to_be_bytes());
+        for sample in [10i32, -20, 1_000_000, i32::MIN] {
+            second.extend_from_slice(&sample.to_be_bytes());
+        }
+
+        second.extend_from_slice(&0x2222u16.to_be_bytes());
+        let hdr_b = (1u16 << 12) | 1; // size 1, 1 sample (first only)
+        second.extend_from_slice(&hdr_b.to_be_bytes());
+        second.extend_from_slice(&99i32.to_be_bytes());
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&((4 + second.len()) as u32).to_be_bytes());
+        bytes.extend(second);
+
+        let decoded = decode(&bytes).unwrap();
+        assert_eq!(decoded.seconds[0].channels.len(), 2);
+        assert_eq!(
+            decoded.seconds[0].channels[0].samples,
+            vec![10, -20, 1_000_000, i32::MIN]
+        );
+        assert_eq!(decoded.seconds[0].channels[0].channel_id, 0x1111);
+        assert_eq!(decoded.seconds[0].channels[1].samples, vec![99]);
+        assert_eq!(decoded.seconds[0].channels[1].channel_id, 0x2222);
+    }
+
+    #[test]
+    fn full_range_i32_deltas_roundtrip_without_panic() {
+        let samples = vec![
+            i32::MIN,
+            i32::MAX,
+            i32::MIN,
+            0,
+            i32::MAX,
+            -1,
+            i32::MIN,
+            i32::MAX,
+        ];
+        assert_eq!(choose_sample_size(&samples), 5);
+
+        let seconds = vec![SecondBlock {
+            time: t(7),
+            channels: vec![ChannelSecond {
+                channel_id: 0x00FF,
+                sample_rate: samples.len() as u16,
+                samples: samples.clone(),
+            }],
+        }];
+        let bytes = encode(WinFormat::Win, &seconds).unwrap();
+        // Channel header sits after 4-byte block size + 6-byte BCD.
+        let hdr = u16::from_be_bytes([bytes[12], bytes[13]]);
+        assert_eq!(hdr >> 12, 5);
+        // Remaining samples are absolute i32, so the second sample is stored as-is.
+        let stored_second = i32::from_be_bytes(bytes[18..22].try_into().unwrap());
+        assert_eq!(stored_second, i32::MAX);
+
+        let decoded = decode(&bytes).unwrap();
+        assert_eq!(decoded.seconds[0].channels[0].samples, samples);
     }
 }
